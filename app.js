@@ -53,7 +53,8 @@ async function loadMenuData() {
 
     // 1. الاتصال بـ Supabase عند توفر البيانات
     if (SUPABASE_URL.trim() !== '' && SUPABASE_ANON_KEY.trim() !== '') {
-      const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/drinks?select=*&order=sort_order.asc`, {
+      const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/drinks?select=*&order=sort_order.asc&_t=${Date.now()}`, {
+        cache: 'no-store',
         headers: {
           'apikey': SUPABASE_ANON_KEY.trim(),
           'Authorization': `Bearer ${SUPABASE_ANON_KEY.trim()}`
