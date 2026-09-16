@@ -1,7 +1,11 @@
 // ==========================================
-// إعدادات رابط SheetDB / Stein / API
-// ضعي رابط API الخاص بك من SheetDB هنا (مثل: 'https://sheetdb.io/api/v1/YOUR_API_ID')
-// إذا تركته فارغاً سيقوم الموقع بالتحميل من ملف menu.json تلقائياً
+// 1. إعدادات Supabase (ضع بيانات المشروع هنا)
+// ==========================================
+const SUPABASE_URL = 'https://vydblzvzfepdubinzwar.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ5ZGJsenZ6ZmVwZHViaW56d2FyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1NzQ2NDIsImV4cCI6MjEwNTE1MDY0Mn0.LUEZZ6R9pKIFfEhu43ViSoxGgA5Fw8q5qSqstj2pzwc';
+
+// ==========================================
+// 2. إعدادات SheetDB / Stein / API آخر (اختياري)
 // ==========================================
 const API_URL = ''; 
 
@@ -18,7 +22,7 @@ let categories = [
 
 const escapeHtml = v => String(v).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 
-// تحويل البيانات القادمة من Google Sheets (SheetDB / Stein) إلى هضم المنيو المفصل
+// تحويل البيانات القادمة من Supabase أو API إلى الهيكل المطلوب للمنيو
 function transformSheetData(flatData) {
   if (!Array.isArray(flatData) || flatData.length === 0) return null;
 
@@ -27,34 +31,57 @@ function transformSheetData(flatData) {
     return flatData;
   }
 
-  // تجميع العناصر حسب القسم category
+  // تجميع العناصر حسب القسم category أو category_name
   const map = new Map();
   flatData.forEach(item => {
-    const catName = item.category || 'أخرى';
+    const catName = item.category_name || item.category || 'أخرى';
     if (!map.has(catName)) {
       map.set(catName, { name: catName, sub: '', items: [] });
     }
     const priceNum = Number(item.price) || 0;
-    const note = item.description || item.note || '';
+    const note = item.note || item.description || '';
     map.get(catName).items.push([item.name, priceNum, note]);
   });
 
   return Array.from(map.values());
 }
 
-// تحميل البيانات من API أو menu.json
+// تحميل البيانات من Supabase أو API أو menu.json
 async function loadMenuData() {
   try {
-    const url = API_URL.trim() !== '' ? API_URL : 'menu.json';
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Network response was not ok');
-    const data = await response.json();
-    const formattedData = transformSheetData(data);
-    if (formattedData && formattedData.length > 0) {
-      categories = formattedData;
+    let rawData = null;
+
+    // 1. الاتصال بـ Supabase عند توفر البيانات
+    if (SUPABASE_URL.trim() !== '' && SUPABASE_ANON_KEY.trim() !== '') {
+      const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/drinks?select=*&order=sort_order.asc`, {
+        headers: {
+          'apikey': SUPABASE_ANON_KEY.trim(),
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY.trim()}`
+        }
+      });
+      if (response.ok) {
+        rawData = await response.json();
+      }
+    } 
+    // 2. الاتصال بـ API آخر (مثل SheetDB)
+    else if (API_URL.trim() !== '') {
+      const response = await fetch(API_URL.trim());
+      if (response.ok) rawData = await response.json();
+    } 
+    // 3. التحميل من ملف menu.json المحلي
+    else {
+      const response = await fetch('menu.json');
+      if (response.ok) rawData = await response.json();
+    }
+
+    if (rawData) {
+      const formattedData = transformSheetData(rawData);
+      if (formattedData && formattedData.length > 0) {
+        categories = formattedData;
+      }
     }
   } catch (error) {
-    console.warn('استخدام البيانات الافتراضية، تعذر تحميل البيانات الخارجية:', error);
+    console.warn('استخدام البيانات الافتراضية، تعذر تحميل البيانات من السيرفر:', error);
   } finally {
     renderAll();
     renderCatNav();
