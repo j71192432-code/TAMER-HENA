@@ -8,13 +8,7 @@ const GOOGLE_SHEET_NAME = 'Sheet1'; // اسم ورقة العمل (الافتر�
 // طريقة (ب): رابط API لـ Google Sheets (مثل Google Apps Script / SheetDB / OpenSheet)
 const GOOGLE_SHEET_API_URL = ''; 
 
-// ==========================================
-// 2. إعدادات Supabase (اختياري / احتياطي)
-// ==========================================
-const SUPABASE_URL = '';
-const SUPABASE_ANON_KEY = '';
-
-// البيانات الافتراضية للمنيو (تعمل كاحتياطي في حال عدم الاتصال بقاعدة البيانات)
+// البيانات الافتراضية للمنيو (تضمن العرض الفوري السريع 0ms دائماً)
 let categories = [
  {name:'قهوة ساخنة',sub:'Hot Coffee & Hot Espresso',img:'cat-hotcoffee.svg',items:[['قهوة تركي',30,'سنجل'],['قهوة تركي',40,'دبل'],['قهوة اسبشيل',40,'سنجل'],['قهوة اسبشيل',50,'دبل'],['قهوة فرنساوي',50],['قهوة بندق',55],['قهوة نوتيلا',60],['إسبريسو',35,'سنجل'],['إسبريسو',45,'دبل'],['ريستريتو',35,'سنجل'],['ريستريتو',45,'دبل'],['ميكاتو',40,'سنجل'],['ميكاتو',50,'دبل'],['أفوكاتو',40,'سنجل'],['أفوكاتو',50,'دبل'],['كون بانا',40],['كورتادو',50,'كلاسيك أو موكا'],['كابتشينو',75],['لاتيه',65],['فلات وايت',60],['أمريكانو',50,'كلاسيك أو بلاك'],['نسكافيه',55,'كلاسيك أو بلاك'],['هوت شوكليت',70,'دارك أو وايت'],['هوت شوكليت مارشميلو',80],['هوت موكا',60,'دارك أو وايت']]},
  {name:'فرابيه وآيس كوفي',sub:'قهوة باردة ومشروبات مثلجة',img:'cat-frappuccino.svg',items:[['فرابيه كراميل',85],['فرابتشينو كلاسيك',75],['فرابيه موكاتشينو',85],['فرابيه لوتس ستروبري',85],['فانيلا فرابتشينو',70],['فرابيه بستشيو',100],['آيس موكا',80,'وايت أو دارك'],['آيس أمريكان',55],['آيس كوفي',65],['آيس كراميل ميكاتو',80],['آيس سبينش لاتيه',80],['آيس ماتش لاتيه',90],['ستروبري ماتش لاتيه',95],['ماتش بستشيو',110],['إيكا آيس كوفي',85],['آيس نيكتو أرش',75]]},
@@ -35,18 +29,11 @@ function normalizeDigits(str) {
   return String(str ?? '').replace(/[٠-٩]/g, d => arabicDigits.indexOf(d));
 }
 
-// دالة تحليل محتوى CSV القادم من Google Sheets مع حماية المقاطع والنصوص
+// تحليل CSV من Google Sheets
 function parseCSV(text) {
   if (!text) return [];
-
-  // إزالة Byte Order Mark (BOM) إن وجد
   text = text.replace(/^\uFEFF/, '');
-
-  // التأكد من أن النص ليس صفحة HTML إرشادات أو خطأ
-  if (text.trim().startsWith('<') || text.includes('<!DOCTYPE')) {
-    console.warn('تنبيه: استجاب Google Sheets بصفحة HTML. يرجى التأكد من أن إعداد المشاركة هو "أي شخص لديه الرابط يمكنه العرض".');
-    return [];
-  }
+  if (text.trim().startsWith('<') || text.includes('<!DOCTYPE')) return [];
 
   const lines = [];
   let row = [];
@@ -108,12 +95,10 @@ function parseCSV(text) {
 function transformSheetData(flatData) {
   if (!Array.isArray(flatData) || flatData.length === 0) return null;
 
-  // إذا كانت البيانات تحتوي بالفعل على بنية المجموعات الجاهزة categories
   if (flatData[0].items && flatData[0].name) {
     return flatData;
   }
 
-  // تجميع العناصر حسب اسم القسم
   const map = new Map();
   flatData.forEach(item => {
     const catName = item.category_name || item.category || item['القسم'] || item['اسم القسم'] || 'أخرى';
@@ -133,46 +118,54 @@ function transformSheetData(flatData) {
     }
   });
 
-  return Array.from(map.values());
+  const result = Array.from(map.values());
+  return result.length > 0 ? result : null;
 }
 
-// تحميل البيانات من السيرفر / Google Sheets
-async function loadMenuData() {
+// 1. تحميل الذاكرة المحلية أولاً لفتح الموقع فوراً في 0 ميلي ثانية بدون أي تأخير
+function initMenu() {
+  try {
+    const cached = localStorage.getItem('tamr_henna_menu_cache');
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        categories = parsed;
+      }
+    }
+  } catch (e) {}
+
+  // رسم المنيو فوراً بدون انتظار الشبكة
+  renderAll();
+  renderCatNav();
+
+  // جلب التحديثات الجديدة من Google Sheets في الخلفية
+  syncMenuFromSheets();
+}
+
+// 2. تحديث المنيو في الخلفية بسلاسة عند تغير الشيت
+async function syncMenuFromSheets() {
   try {
     let rawData = null;
 
-    // 1. الاتصال بـ Google Sheets مباشرة عبر رابط أو ID الشيت (CSV Export)
     if (GOOGLE_SHEET_ID.trim() !== '') {
       let sheetId = GOOGLE_SHEET_ID.trim();
       const match = sheetId.match(/\/d\/([a-zA-Z0-9-_]+)/);
       if (match) sheetId = match[1];
 
       const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(GOOGLE_SHEET_NAME)}&_t=${Date.now()}`;
-      const response = await fetch(csvUrl, { cache: 'no-store' });
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 seconds max
+
+      const response = await fetch(csvUrl, { cache: 'no-store', signal: controller.signal });
+      clearTimeout(timeoutId);
+
       if (response.ok) {
         const csvText = await response.text();
         rawData = parseCSV(csvText);
       }
-    }
-    // 2. الاتصال بـ API لـ Google Sheets (مثل OpenSheet / SheetDB / Google Apps Script)
-    else if (GOOGLE_SHEET_API_URL.trim() !== '') {
+    } else if (GOOGLE_SHEET_API_URL.trim() !== '') {
       const response = await fetch(GOOGLE_SHEET_API_URL.trim(), { cache: 'no-store' });
-      if (response.ok) rawData = await response.json();
-    }
-    // 3. الاتصال بـ Supabase (احتياطي في حال رغبة الاستخدام مستقبلاً)
-    else if (SUPABASE_URL.trim() !== '' && SUPABASE_ANON_KEY.trim() !== '') {
-      const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/drinks?select=*&order=sort_order.asc&_t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: {
-          'apikey': SUPABASE_ANON_KEY.trim(),
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY.trim()}`
-        }
-      });
-      if (response.ok) rawData = await response.json();
-    } 
-    // 4. التحميل من ملف menu.json المحلي
-    else {
-      const response = await fetch('menu.json');
       if (response.ok) rawData = await response.json();
     }
 
@@ -180,13 +173,15 @@ async function loadMenuData() {
       const formattedData = transformSheetData(rawData);
       if (formattedData && formattedData.length > 0) {
         categories = formattedData;
+        try {
+          localStorage.setItem('tamr_henna_menu_cache', JSON.stringify(formattedData));
+        } catch (e) {}
+        renderAll();
+        renderCatNav();
       }
     }
   } catch (error) {
-    console.warn('استخدام البيانات الافتراضية، تعذر تحميل البيانات من السيرفر الخارجية:', error);
-  } finally {
-    renderAll();
-    renderCatNav();
+    console.log('يعمل المنيو بالبيانات المخزنة محلياً، جار التحديث عند استجابة الشبكة.');
   }
 }
 
@@ -198,7 +193,6 @@ function renderCatNav() {
   const nav = document.getElementById('cat-nav');
   if (!nav) return;
 
-  // تنظيف أي مراقب سابق لمنع تكرار الأحداث في الذاكرة
   if (catNavObserver) {
     catNavObserver.disconnect();
     catNavObserver = null;
@@ -277,16 +271,16 @@ function renderAll() {
         ${p1.map((c, i) => renderCategoryHtml(c, i)).join('')}
       </div>
       <div class="col-images">
-        <img src="media/1.webp" class="side-img" alt="صورة 1" style="animation-delay: 0.15s;" loading="lazy">
-        <img src="media/2.webp" class="side-img" alt="صورة 2" style="animation-delay: 0.22s;" loading="lazy">
-        <img src="media/3.webp" class="side-img" alt="صورة 3" style="animation-delay: 0.29s;" loading="lazy">
-        <img src="media/4.webp" class="side-img" alt="صورة 4" style="animation-delay: 0.36s;" loading="lazy">
-        <img src="media/5.webp" class="side-img" alt="صورة 5" style="margin-top: 30px; animation-delay: 0.43s;" loading="lazy">
-        <img src="media/6.webp" class="side-img" alt="صورة 6" style="animation-delay: 0.50s;" loading="lazy">
-        <img src="media/7.webp" class="side-img" alt="صورة 7" style="animation-delay: 0.57s;" loading="lazy">
-        <img src="media/8.webp" class="side-img" alt="صورة 8" style="margin-top: 30px; animation-delay: 0.64s;" loading="lazy">
-        <img src="media/9.webp" class="side-img" alt="صورة 9" style="animation-delay: 0.71s;" loading="lazy">
-        <img src="media/10.webp" class="side-img" alt="صورة 10" style="margin-top: 30px; animation-delay: 0.78s;" loading="lazy">
+        <img src="media/1.webp" class="side-img" alt="صورة 1" loading="lazy">
+        <img src="media/2.webp" class="side-img" alt="صورة 2" loading="lazy">
+        <img src="media/3.webp" class="side-img" alt="صورة 3" loading="lazy">
+        <img src="media/4.webp" class="side-img" alt="صورة 4" loading="lazy">
+        <img src="media/5.webp" class="side-img" alt="صورة 5" style="margin-top: 30px;" loading="lazy">
+        <img src="media/6.webp" class="side-img" alt="صورة 6" loading="lazy">
+        <img src="media/7.webp" class="side-img" alt="صورة 7" loading="lazy">
+        <img src="media/8.webp" class="side-img" alt="صورة 8" style="margin-top: 30px;" loading="lazy">
+        <img src="media/9.webp" class="side-img" alt="صورة 9" loading="lazy">
+        <img src="media/10.webp" class="side-img" alt="صورة 10" style="margin-top: 30px;" loading="lazy">
       </div>
     </div>`;
 
@@ -296,17 +290,17 @@ function renderAll() {
         ${p2.map((c, i) => renderCategoryHtml(c, halfLength + i)).join('')}
       </div>
       <div class="col-images">
-        <img src="media/11.webp" class="side-img" alt="صورة 11" style="animation-delay: 0.20s;" loading="lazy">
-        <img src="media/12.webp" class="side-img" alt="صورة 12" style="animation-delay: 0.27s;" loading="lazy">
-        <img src="media/13.webp" class="side-img" alt="صورة 13" style="margin-top: 30px; animation-delay: 0.34s;" loading="lazy">
-        <img src="media/14.webp" class="side-img" alt="صورة 14" style="animation-delay: 0.41s;" loading="lazy">
-        <img src="media/15.webp" class="side-img" alt="صورة 15" style="margin-top: 30px; animation-delay: 0.48s;" loading="lazy">
-        <img src="media/16.webp" class="side-img" alt="صورة 16" style="animation-delay: 0.55s;" loading="lazy">
-        <img src="media/17.webp" class="side-img" alt="صورة 17" style="animation-delay: 0.62s;" loading="lazy">
-        <img src="media/18.webp" class="side-img" alt="صورة 18" style="animation-delay: 0.69s;" loading="lazy">
+        <img src="media/11.webp" class="side-img" alt="صورة 11" loading="lazy">
+        <img src="media/12.webp" class="side-img" alt="صورة 12" loading="lazy">
+        <img src="media/13.webp" class="side-img" alt="صورة 13" style="margin-top: 30px;" loading="lazy">
+        <img src="media/14.webp" class="side-img" alt="صورة 14" loading="lazy">
+        <img src="media/15.webp" class="side-img" alt="صورة 15" style="margin-top: 30px;" loading="lazy">
+        <img src="media/16.webp" class="side-img" alt="صورة 16" loading="lazy">
+        <img src="media/17.webp" class="side-img" alt="صورة 17" loading="lazy">
+        <img src="media/18.webp" class="side-img" alt="صورة 18" loading="lazy">
       </div>
     </div>`;
 }
 
-// بدء تحميل البيانات عند فتح الموقع
-loadMenuData();
+// تشغيل المنيو فوراً عند فتح الصفحة
+initMenu();
