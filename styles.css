@@ -10,7 +10,7 @@
 }
 
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html{scroll-behavior:smooth;overscroll-behavior-y:none}
+html{scroll-behavior:smooth}
 body{
   margin:0;
   background:var(--bg);
